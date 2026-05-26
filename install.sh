@@ -25,13 +25,24 @@ fi
 
 # --- БЛОК 3: Сборка Caddy и Бэкенда ---
 echo -e "${GREEN}=== 3. Сборка Caddy и Бэкенда ===${NC}"
+
+# Сборка Caddy
 if ! command -v xcaddy &> /dev/null; then
     go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-    ln -sf ~/go/bin/xcaddy /usr/bin/xcaddy
+    ln -sf ~/go/bin/xcaddy /usr/bin/go/bin/xcaddy # Исправил путь, если go в /usr/local/go
 fi
 xcaddy build --with github.com/caddyserver/forwardproxy@master=github.com/klzgrad/forwardproxy@naive
 cp ./caddy /usr/local/bin/caddy && chmod +x /usr/local/bin/caddy
 
+# Сборка Бэкенда с предварительной проверкой зависимостей
+echo -e "${GREEN}--- Подготовка модулей Go ---${NC}"
+export GOPROXY=https://proxy.golang.org,direct
+# Если go.mod нет, инициализируем
+[ ! -f "go.mod" ] && go mod init naivetune
+# Скачиваем и чистим зависимости
+go mod tidy
+
+echo -e "${GREEN}--- Компиляция бэкенда ---${NC}"
 go build -o naivetune-backend *.go
 cp ./naivetune-backend /usr/local/bin/naivetune-backend && chmod +x /usr/local/bin/naivetune-backend
 
