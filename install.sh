@@ -1,141 +1,99 @@
 #!/bin/bash
-
-# Скрипт автоматического развертывания Naivetune (Универсальный: VPS / WSL)
 set -e
-
-# Цвета для вывода
 GREEN='\033[0;32m'
 RED='\033[0;31m'
-NC='\033[0;0m'
+NC='\033[0m'
 
-echo -e "${GREEN}=== Проверка операционной системы ===${NC}"
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$ID
-else
-    echo -e "${RED}Ошибка: невозможно определить ОС.${NC}"
-    exit 1
-fi
+# --- БЛОК 1: Подготовка и проверка ---
+if [ "$EUID" -ne 0 ]; then echo -e "${RED}Запустите через sudo!${NC}"; exit 1; fi
 
-if [ "$OS" != "ubuntu" ] && [ "$OS" != "debian" ]; then
-    echo -e "${RED}Скрипт поддерживает только Ubuntu или Debian.${NC}"
-    exit 1
-fi
+echo -e "${GREEN}=== Проверка ОС ===${NC}"
+if [ -f /etc/os-release ]; then . /etc/os-release; else echo "Ошибка ОС"; exit 1; fi
+if [ "$ID" != "ubuntu" ] && [ "$ID" != "debian" ]; then echo "Только Ubuntu/Debian"; exit 1; fi
 
-echo -e "${GREEN}=== 1. Установка системных зависимостей ($OS) ===${NC}"
-apt-get update || true
-apt-get install -y wget curl git ufw tar gzip
+echo -e "${GREEN}=== 1. Установка системных зависимостей ===${NC}"
+apt-get update && apt-get install -y wget curl git ufw tar gzip figlet
 
-echo -e "${GREEN}=== 2. Установка среды Go ===${NC}"
+# --- БЛОК 2: Установка Go ---
 if ! command -v go &> /dev/null; then
-    GO_VERSION="1.22.2"
-    wget https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
-    rm -rf /usr/local/go && tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
-    rm go${GO_VERSION}.linux-amd64.tar.gz
+    echo -e "${GREEN}=== 2. Установка среды Go ===${NC}"
+    wget -q https://go.dev/dl/go1.22.2.linux-amd64.tar.gz
+    rm -rf /usr/local/go && tar -C /usr/local -xzf go1.22.2.linux-amd64.tar.gz
+    rm go1.22.2.linux-amd64.tar.gz
     ln -sf /usr/local/go/bin/go /usr/bin/go
 fi
-echo "Go версия: $(go version)"
 
-echo -e "${GREEN}=== 3. Сборка кастомного Caddy с NaiveProxy ===${NC}"
-if [ ! -f ./caddy ]; then
-    if ! command -v xcaddy &> /dev/null; then
-        go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-        ln -sf ~/go/bin/xcaddy /usr/bin/xcaddy
-	fi
-    # Сборка caddy с плагином маскировочного прокси
-    xcaddy build --with github.com/caddyserver/forwardproxy@master=github.com/klzgrad/forwardproxy@naive
+# --- БЛОК 3: Сборка Caddy и Бэкенда ---
+echo -e "${GREEN}=== 3. Сборка Caddy и Бэкенда ===${NC}"
+if ! command -v xcaddy &> /dev/null; then
+    go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+    ln -sf ~/go/bin/xcaddy /usr/bin/xcaddy
 fi
+xcaddy build --with github.com/caddyserver/forwardproxy@master=github.com/klzgrad/forwardproxy@naive
+cp ./caddy /usr/local/bin/caddy && chmod +x /usr/local/bin/caddy
 
-# Перенос бинарника Caddy в системную папку
-cp ./caddy /usr/local/bin/caddy
-chmod +x /usr/local/bin/caddy
-
-echo -e "${GREEN}=== 4. Подготовка структуры папок ===${NC}"
-mkdir -p /etc/caddy
-mkdir -p /var/lib/naivetune/templates
-mkdir -p /var/www/html
-
-# Копирование шаблона конфигурации и заглушек сайтов
-cp ./Caddyfile.template /var/lib/naivetune/Caddyfile.template
-
-if [ -d "./templates" ]; then
-    cp -r ./templates/* /var/lib/naivetune/templates/
-    # Берем один из шаблонов (landing1) как дефолтный сайт-маскировку
-    if [ -d "./templates/landing1" ]; then
-        cp -r ./templates/landing1/* /var/www/html/
-	fi
-fi
-
-echo -e "${GREEN}=== 5. Компиляция бэкенда панели ===${NC}"
-export GOPROXY=https://proxy.golang.org,direct
 go build -o naivetune-backend *.go
-cp ./naivetune-backend /usr/local/bin/naivetune-backend
-chmod +x /usr/local/bin/naivetune-backend
+cp ./naivetune-backend /usr/local/bin/naivetune-backend && chmod +x /usr/local/bin/naivetune-backend
 
-echo -e "${GREEN}=== 6. Создание служб Systemd ===${NC}"
-# Служба для Caddy
-cat <<EOF > /etc/systemd/system/caddy.service
+# --- БЛОК 4: Структура и Systemd ---
+echo -e "${GREEN}=== 4. Настройка системы ===${NC}"
+mkdir -p /etc/caddy /var/lib/naivetune/templates /var/www/html
+[ -f "./Caddyfile.template" ] && cp ./Caddyfile.template /var/lib/naivetune/
+[ -d "./templates" ] && cp -r ./templates/* /var/lib/naivetune/templates/
+
+# Создание сервисов
+cat << EOF > /etc/systemd/system/caddy.service
 [Unit]
-Description=Caddy Server with NaiveProxy
-After=network.target network-online.target
-Requires=network-online.target
-
+Description=Caddy Server
+After=network.target
 [Service]
-Type=notify
-ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
-TimeoutStopSec=5s
-LimitNOFILE=1048576
-LimitNPROC=512
-PrivateTmp=true
-ProtectSystem=full
-
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
+Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Служба для Бэкенда Naivetune
-cat <<EOF > /etc/systemd/system/naivetune.service
+cat << EOF > /etc/systemd/system/naivetune.service
 [Unit]
-Description=Naivetune Panel Service
+Description=Naivetune Panel
 After=network.target
-
 [Service]
-Type=simple
 WorkingDirectory=/var/lib/naivetune
 ExecStart=/usr/local/bin/naivetune-backend
 Restart=always
-RestartSec=5
-
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Первичная генерация базового Caddyfile при первой установке
-if [ ! -f /etc/caddy/Caddyfile ]; then
-    
-fi
-
 systemctl daemon-reload
-systemctl enable caddy
-systemctl enable naivetune
+systemctl enable caddy naivetune
+systemctl restart caddy naivetune
 
-echo -e "${GREEN}=== 7. Настройка брандмауэра UFW ===${NC}"
-if command -v ufw &> /dev/null; then
-    ufw allow 80/tcp
-    ufw allow 443/tcp
-    ufw allow 8080/tcp
-    ufw allow 22/tcp   # Чтобы не заблокировать доступ к VPS по SSH
-    ufw deny 8000/tcp  # Закрываем порт управления снаружи ради безопасности
-    ufw --force enable
-fi
+# --- ГЕНЕРАЦИЯ АДМИН-ДАННЫХ ПРИ ПЕРВОЙ УСТАНОВКЕ ---
+ENV_FILE="/var/lib/naivetune/.env"
 
-# Принудительный старт служб (для WSL и серверов)
-echo -e "${GREEN}=== 8. Запуск служб ===${NC}"
-systemctl start naivetune || true
-systemctl start caddy || true
-
-echo -e "${GREEN}=========================================================${NC}"
-echo -e "${GREEN} Скрипт успешно завершил универсальную установку!${NC}"
-echo -e "${GREEN} Панель готова к работе как локально, так и на VPS.${NC}"
-echo -e "${GREEN}=========================================================${NC}"
+if [ ! -f "$ENV_FILE" ]; then
+    # Генерируем рандомные данные
+    ADMIN_USER=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
+    ADMIN_PASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
+    WEB_PATH="/"$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1)"/"
+    
+    # Записываем их в файл
+    echo "ADMIN_USER=$ADMIN_USER" > $ENV_FILE
+    echo "ADMIN_PASS=$ADMIN_PASS" >> $ENV_FILE
+    echo "WEB_BASE_PATH=$WEB_PATH" >> $ENV_FILE
+    
+    # Выводим «красивую» панель
+    clear
+    figlet NaiveTune
+    echo -e "========================================================="
+    echo -e "Warning: Panel is not secure with SSL"
+    echo -e "username: ${GREEN}$ADMIN_USER${NC}"
+    echo -e "password: ${GREEN}$ADMIN_PASS${NC}"
+    echo -e "port: 2283"
+    echo -e "webBasePath: ${GREEN}$WEB_PATH${NC}"
+    echo -e "Access URL: http://<ВАШ_IP>:2283$WEB_PATH"
+    echo -e "========================================================="
+else
+    echo -e "${GREEN}Настройки уже существуют, пропускаем генерацию.${NC}"
+fi=

@@ -1,32 +1,33 @@
 package main
 
 import (
-	"fmt"
+	"bufio"
 	"log"
-	"math/rand"
 	"os"
-	"time"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
+// Глобальные переменные для доступа к настройкам
 var (
-	// Настройки по умолчанию
 	AdminUser = ""
 	AdminPass = ""
-	Port      = "8000"
+	Port      = "2283" // Порт из твоего инсталлятора
+	WebPath   = ""
 )
 
 func main() {
-	// 1. Инициализация системы (проверка конфига или создание нового)
-	setupInitialConfig()
+	// 1. Загружаем настройки из .env, созданного инсталлятором
+	loadConfig()
 
-	// 2. Инициализация базы данных (твоя существующая функция)
+	// 2. Инициализация базы данных
 	InitDB()
 
-	// 3. Настройка маршрутизатора
+	// 3. Настройка Gin
 	r := gin.Default()
 
+	// 4. API маршруты
 	api := r.Group("/api")
 	{
 		api.GET("/users", GetUsers)
@@ -34,46 +35,38 @@ func main() {
 		api.DELETE("/users/:id", DeleteUser)
 	}
 
-	// 4. Запуск сервера
-	log.Printf("Бэкенд запущен на порту :%s", Port)
+	// 5. Запуск сервера
+	log.Printf("Панель Naivetune запущена. Путь: %s, Порт: %s", WebPath, Port)
 	r.Run("127.0.0.1:" + Port)
 }
 
-func setupInitialConfig() {
-	envPath := "/var/lib/naivetune/.env" // Место хранения настроек
-
-	if _, err := os.Stat(envPath); err == nil {
-		// Файл есть, читаем из него (код чтения env пропущен для краткости)
-		return
+// Функция чтения настроек из файла, созданного install.sh
+func loadConfig() {
+	envPath := "/var/lib/naivetune/.env"
+	file, err := os.Open(envPath)
+	if err != nil {
+		log.Fatalf("Ошибка: файл настроек не найден. Запустите install.sh. %v", err)
 	}
-
-	// Генерируем данные
-	rand.Seed(time.Now().UnixNano())
-	AdminUser = randomString(10)
-	AdminPass = randomString(10)
-	basePath := "/" + randomString(15) + "/"
-
-	// Сохраняем в файл
-	file, _ := os.Create(envPath)
 	defer file.Close()
-	fmt.Fprintf(file, "ADMIN_USER=%s\nADMIN_PASS=%s\nWEB_BASE_PATH=%s\n", AdminUser, AdminPass, basePath)
 
-	// Вывод сообщения "как на скриншоте"
-	fmt.Println("=========================================================")
-	fmt.Println("Warning: Panel is not secure with SSL")
-	fmt.Printf("username: %s\n", AdminUser)
-	fmt.Printf("password: %s\n", AdminPass)
-	fmt.Printf("port: %s\n", Port)
-	fmt.Printf("webBasePath: %s\n", basePath)
-	fmt.Printf("Access URL: http://1.1.1.1:%s%s\n", Port, basePath)
-	fmt.Println("=========================================================")
-}
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := parts[0]
+		val := parts[1]
 
-func randomString(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		switch key {
+		case "ADMIN_USER":
+			AdminUser = val
+		case "ADMIN_PASS":
+			AdminPass = val
+		case "WEB_BASE_PATH":
+			WebPath = val
+		}
 	}
-	return string(b)
+	log.Println("Настройки успешно загружены из .env")
 }
