@@ -6,10 +6,9 @@
     root * /var/www/html
     file_server
     
-    forward_proxy {
+   forward_proxy {
         hide_ip
         hide_via
-{auth_users}
-        probe_resistance secret_string
+        {auth_users}
     }
 }

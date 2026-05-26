@@ -113,7 +113,7 @@ EOF
 
 # Первичная генерация базового Caddyfile при первой установке
 if [ ! -f /etc/caddy/Caddyfile ]; then
-    sed -e 's/{domain}/http:\/\/localhost:8080/g' -e 's/{auth_users}//g' /var/lib/naivetune/Caddyfile.template > /etc/caddy/Caddyfile
+    
 fi
 
 systemctl daemon-reload

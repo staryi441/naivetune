@@ -22,7 +22,7 @@ func UpdateCaddyConfig(currentHost string) error {
 	// Формируем строки вида: auth_user имя uuid
 	var authLines []string
 	for _, user := range users {
-		authLines = append(authLines, fmt.Sprintf("        auth_user %s %s", user.Username, user.UUID))
+		authLines = append(authLines, fmt.Sprintf("        basic_auth %s %s", user.Username, user.UUID))
 	}
 	authUsersBlock := strings.Join(authLines, "\n")
 
