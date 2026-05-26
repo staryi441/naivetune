@@ -1,0 +1,17 @@
+{
+    order forward_proxy before file_server
+}
+
+{domain} {
+    tls {email}
+    
+    root * /var/www/html
+    file_server
+    
+    forward_proxy {
+        hide_ip
+        hide_via
+{auth_users}
+        probe_resistance secret_string
+    }
+}

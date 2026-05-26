@@ -1,0 +1,5 @@
+naivetune-backend
+naivetune.db
+naivetune.db-journal
+.vscode/
+*.exe
