@@ -5,49 +5,61 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 )
 
 const (
-	TemplatePath     = "Caddyfile.template"
-	CaddyfileOutputs = "/etc/caddy/Caddyfile"
+	CaddyfilePath = "/etc/caddy/Caddyfile"
+	TemplatePath  = "/var/lib/naivetune/Caddyfile.template"
 )
 
-func SyncCaddyConfig(domain string, email string) error {
-	templateBytes, err := os.ReadFile(TemplatePath)
-	if err != nil {
-		return fmt.Errorf("error reading template: %v", err)
-	}
-	templateStr := string(templateBytes)
-
-	var activeUsers []User
-	now := time.Now()
-	result := DB.Where("is_active = ? AND expires_at > ?", true, now).Find(&activeUsers)
-	if result.Error != nil {
-		return fmt.Errorf("error fetching active users: %v", result.Error)
+// Функция вытягивает юзеров из БД, подставляет в шаблон и перезапускает Caddy
+func UpdateCaddyConfig(currentHost string) error {
+	var users []User
+	if err := DB.Find(&users).Error; err != nil {
+		return fmt.Errorf("ошибка чтения пользователей из БД: %w", err)
 	}
 
+	// Формируем строки вида: auth_user имя uuid
 	var authLines []string
-	for _, user := range activeUsers {
-		line := fmt.Sprintf("        auth_user %s %s", user.Username, user.UUID)
-		authLines = append(authLines, line)
+	for _, user := range users {
+		authLines = append(authLines, fmt.Sprintf("        auth_user %s %s", user.Username, user.UUID))
 	}
-	authUsersStr := strings.Join(authLines, "\n")
+	authUsersBlock := strings.Join(authLines, "\n")
 
-	finalConfig := strings.ReplaceAll(templateStr, "{domain}", domain)
-	finalConfig = strings.ReplaceAll(finalConfig, "{email}", email)
-	finalConfig = strings.ReplaceAll(finalConfig, "{auth_users}", authUsersStr)
-
-	err = os.WriteFile(CaddyfileOutputs, []byte(finalConfig), 0644)
+	// Читаем шаблон Caddyfile.template
+	templateContent, err := os.ReadFile(TemplatePath)
 	if err != nil {
-		return fmt.Errorf("error writing Caddyfile: %v", err)
+		return fmt.Errorf("ошибка чтения шаблона Caddyfile: %w", err)
 	}
 
-	cmd := exec.Command("caddy", "reload", "--config", CaddyfileOutputs)
+	// Очищаем хост от порта, если он передан (например, localhost:8000 -> localhost)
+	host := currentHost
+	if strings.Contains(host, ":") {
+		host = strings.Split(host, ":")[0]
+	}
+
+	// Определяем блок домена: для локалки отключаем TLS, на боевом VPS оставляем чистый домен для авто-SSL
+	domainBlock := host
+	if host == "localhost" || host == "127.0.0.1" {
+		domainBlock = "http://localhost:8080"
+	}
+
+	// Подставляем данные в шаблон
+	newConfig := strings.ReplaceAll(string(templateContent), "{domain}", domainBlock)
+	newConfig = strings.ReplaceAll(newConfig, "{auth_users}", authUsersBlock)
+
+	// Записываем готовый Caddyfile в системную папку
+	err = os.WriteFile(CaddyfilePath, []byte(newConfig), 0644)
+	if err != nil {
+		return fmt.Errorf("ошибка записи системного Caddyfile: %w", err)
+	}
+
+	// Мягко перезапускаем службу Caddy без разрыва текущих соединений
+	cmd := exec.Command("systemctl", "reload", "caddy")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("error reloading caddy: %v", err)
+		// Если reload не сработал (например, служба была выключена), делаем жесткий рестарт
+		exec.Command("systemctl", "restart", "caddy").Run()
 	}
 
-	fmt.Println("Caddy successfully reloaded.")
 	return nil
 }
