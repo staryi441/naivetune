@@ -4,17 +4,11 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# --- БЛОК 1: Подготовка и проверка ---
 if [ "$EUID" -ne 0 ]; then echo -e "${RED}Запустите через sudo!${NC}"; exit 1; fi
-
-echo -e "${GREEN}=== Проверка ОС ===${NC}"
-if [ -f /etc/os-release ]; then . /etc/os-release; else echo "Ошибка ОС"; exit 1; fi
-if [ "$ID" != "ubuntu" ] && [ "$ID" != "debian" ]; then echo "Только Ubuntu/Debian"; exit 1; fi
 
 echo -e "${GREEN}=== 1. Установка системных зависимостей ===${NC}"
 apt-get update && apt-get install -y wget curl git ufw tar gzip figlet
 
-# --- БЛОК 2: Установка Go ---
 if ! command -v go &> /dev/null; then
     echo -e "${GREEN}=== 2. Установка среды Go ===${NC}"
     wget -q https://go.dev/dl/go1.22.2.linux-amd64.tar.gz
@@ -23,10 +17,7 @@ if ! command -v go &> /dev/null; then
     ln -sf /usr/local/go/bin/go /usr/bin/go
 fi
 
-# --- БЛОК 3: Сборка Caddy и Бэкенда ---
 echo -e "${GREEN}=== 3. Сборка Caddy и Бэкенда ===${NC}"
-
-# Сборка Caddy
 if ! command -v xcaddy &> /dev/null; then
     export GOPATH=$HOME/go
     go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
@@ -35,21 +26,16 @@ fi
 xcaddy build --with github.com/caddyserver/forwardproxy@master=github.com/klzgrad/forwardproxy@naive
 cp ./caddy /usr/local/bin/caddy && chmod +x /usr/local/bin/caddy
 
-# Сборка Бэкенда с предварительной проверкой зависимостей
-echo -e "${GREEN}--- Подготовка модулей Go ---${NC}"
+echo -e "${GREEN}--- Сборка Go-бэкенда ---${NC}"
 export GOPROXY=https://proxy.golang.org,direct
 [ ! -f "go.mod" ] && go mod init naivetune
 go mod tidy
-
-echo -e "${GREEN}--- Компиляция бэкенда ---${NC}"
 go build -o naivetune-backend *.go
 cp ./naivetune-backend /usr/local/bin/naivetune-backend && chmod +x /usr/local/bin/naivetune-backend
 
-# --- БЛОК 4: Настройка структуры, данных и Caddyfile ---
-echo -e "${GREEN}=== 4. Настройка системы и конфигурации ===${NC}"
+echo -e "${GREEN}=== 4. Конфигурация системы ===${NC}"
 mkdir -p /etc/caddy /var/lib/naivetune/templates /var/www/html
 
-# Очищаем старые шаблоны в системной директории перед копированием свежих из репозитория
 rm -rf /var/lib/naivetune/templates/*
 if [ -d "./templates" ]; then
     cp -r ./templates/* /var/lib/naivetune/templates/
@@ -57,7 +43,6 @@ fi
 
 ENV_FILE="/var/lib/naivetune/.env"
 if [ ! -f "$ENV_FILE" ]; then
-    # Данных нет — генерируем новые
     ADMIN_USER=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
     ADMIN_PASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
     WEB_PATH_RAW=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1)
@@ -67,32 +52,24 @@ if [ ! -f "$ENV_FILE" ]; then
     echo "ADMIN_PASS=$ADMIN_PASS" >> $ENV_FILE
     echo "WEB_BASE_PATH=$WEB_PATH" >> $ENV_FILE
 else
-    # Данные уже есть — парсим их аккуратно без source
     ADMIN_USER=$(grep ADMIN_USER "$ENV_FILE" | cut -d '=' -f2)
     ADMIN_PASS=$(grep ADMIN_PASS "$ENV_FILE" | cut -d '=' -f2)
     WEB_PATH=$(grep WEB_BASE_PATH "$ENV_FILE" | cut -d '=' -f2)
 fi
 
-# Генерируем Caddyfile с разделением портов:
-# Порт 80 — для внешних пользователей (отдает выбранный из админки шаблон из /var/www/html)
-# Порт 2283 — внешний порт админки. Caddy принимает запросы и отправляет на внутренний порт Go (8080)
+# Генерируем Caddyfile: Caddy висит на внешнем порту 2283 и проксирует всё на Go
 cat << EOF > /etc/caddy/Caddyfile
-# Сайт-заглушка для внешних запросов по домену или IP
-:80 {
-    root * /var/www/html
-    file_server
+:2283 {
+    reverse_proxy 127.0.0.1:8080
 }
 
-# Админ-панель NaiveTune
-:2283 {
-    reverse_proxy $WEB_PATH* 127.0.0.1:8080
-    
+:80 {
     root * /var/www/html
     file_server
 }
 EOF
 
-# Создание системных сервисов
+# Сервисы systemd
 cat << EOF > /etc/systemd/system/caddy.service
 [Unit]
 Description=Caddy Server
@@ -116,19 +93,22 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
+# Перед перезапуском жестко освобождаем порт 2283, если там завис старый процесс
+echo -e "${GREEN}--- Сброс старых сетевых сокетов ---${NC}"
+fuser -k 2283/tcp || true
+fuser -k 8080/tcp || true
+
 systemctl daemon-reload
 systemctl enable caddy naivetune
-systemctl restart caddy naivetune
+systemctl restart naivetune caddy
 
-# --- БЛОК 5: Создание утилиты naivetune ---
-echo -e "${GREEN}=== 5. Создание утилиты контроля naivetune ===${NC}"
+echo -e "${GREEN}=== 5. Обновление утилиты naivetune ===${NC}"
 cat << 'EOF' > /usr/local/bin/naivetune
 #!/bin/bash
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Раздельный опрос статуса служб
 if systemctl is-active --quiet caddy; then CADDY_ST="${GREEN}RUNNING${NC}"; else CADDY_ST="${RED}STOPPED${NC}"; fi
 if systemctl is-active --quiet naivetune; then BACKEND_ST="${GREEN}RUNNING${NC}"; else BACKEND_ST="${RED}STOPPED${NC}"; fi
 
@@ -147,7 +127,6 @@ fi
 SERVER_IP=$(hostname -I | awk '{print $1}')
 [ -z "$SERVER_IP" ] && SERVER_IP="127.0.0.1"
 
-# Гарантируем правильное отображение ссылки со слэшем на конце
 CLEAN_PATH="/"$(echo "$WEB_PATH" | tr -d '/')
 
 clear
@@ -163,15 +142,13 @@ echo -e "Access:   http://${SERVER_IP}:2283${CLEAN_PATH}/"
 echo -e "========================================================="
 
 if [ "$CADDY_ST" == "${RED}STOPPED${NC}" ] || [ "$BACKEND_ST" == "${RED}STOPPED${NC}" ]; then
-    echo -e "${RED}Рестарт служб: sudo systemctl restart caddy naivetune${NC}"
+    echo -e "${RED}Рестарт служб: sudo systemctl restart naivetune caddy${NC}"
 fi
 EOF
 chmod +x /usr/local/bin/naivetune
 
-# --- БЛОК 6: Привязка к автозапуску терминала и вывод панели ---
 if ! grep -q "naivetune" ~/.bashrc; then
     echo "naivetune" >> ~/.bashrc
 fi
 
-# Финальный вызов панели, чтобы сразу показать результат
 naivetune
