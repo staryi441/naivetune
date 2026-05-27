@@ -46,81 +46,81 @@
     </div>
 
     <script>
-        // Получаем динамический секретный путь, переданный из Go-бэкенда
-        const basePath = "{{.CurrentWebPath}}";
-        let selectedTemplate = "";
+    // Подтягиваем секретный путь, который Go передал в шаблон
+    const WEB_PATH = "{{.CurrentWebPath}}";
 
-        // Загрузка папок-заглушек с бэкенда
-        async function loadTemplates() {
-            try {
-                const response = await fetch(`${basePath}api/templates`);
-                const templates = await response.json();
-                const listContainer = document.getElementById('templates-list');
-                listContainer.innerHTML = '';
+    // Функция для сборки правильных URL-адресов
+    function getApiUrl(endpoint) {
+        // Убираем лишние слэши, чтобы путь не ломался
+        const cleanBase = WEB_PATH.endsWith('/') ? WEB_PATH.slice(0, -1) : WEB_PATH;
+        const cleanEndpoint = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+        return `${cleanBase}${cleanEndpoint}`;
+    }
 
-                if (!templates || templates.length === 0) {
-                    listContainer.innerHTML = '<p class="text-gray-500 text-sm">В папке templates нет доступных сайтов.</p>';
-                    return;
-                }
+    // 1. Загрузка шаблонов сайтов
+    async function loadTemplates() {
+        const templatesList = document.getElementById('templates-list');
+        try {
+            const response = await fetch(getApiUrl('/api/templates'));
+            if (!response.ok) throw new Error('Ошибка сервера');
+            
+            const templates = await response.json();
+            templatesList.innerHTML = '';
 
-                templates.forEach(tpl => {
-                    const btn = document.createElement('button');
-                    btn.className = "w-full text-left px-4 py-3 rounded-lg bg-gray-800/40 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 transition font-medium text-sm block cursor-pointer";
-                    btn.innerText = tpl;
-                    btn.onclick = () => selectTemplate(tpl, btn);
-                    listContainer.appendChild(btn);
-                });
-            } catch (err) {
-                console.error("Ошибка загрузки списка шаблонов:", err);
+            if (!templates || templates.length === 0) {
+                templatesList.innerHTML = '<div class="p-4 text-gray-400 text-center">Шаблоны не найдены</div>';
+                return;
             }
+
+            templates.forEach(tpl => {
+                const div = document.createElement('div');
+                div.className = 'p-3 mb-2 bg-slate-800 rounded cursor-pointer hover:bg-slate-700 transition select-none';
+                div.innerText = tpl;
+                div.onclick = () => selectTemplate(tpl);
+                templatesList.appendChild(div);
+            });
+        } catch (error) {
+            templatesList.innerHTML = '<div class="p-4 text-red-400 text-center">Ошибка загрузки шаблонов</div>';
+        }
+    }
+
+    // 2. Выбор шаблона для превью
+    function selectTemplate(name) {
+        window.selectedTemplate = name;
+        const previewFrame = document.getElementById('preview-frame');
+        // Загружаем index.html выбранного шаблона через статический роут бэкенда
+        previewFrame.src = getApiUrl(`/preview/${name}/index.html`);
+    }
+
+    // 3. Применение шаблона-заглушки
+    async function applyTemplate() {
+        if (!window.selectedTemplate) {
+            alert('Сначала выберите шаблон из списка!');
+            return;
         }
 
-        // Выбор шаблона из списка
-        function selectTemplate(name, element) {
-            selectedTemplate = name;
-            
-            // Сброс активных стилей у кнопок
-            document.querySelectorAll('#templates-list button').forEach(b => {
-                b.classList.remove('border-green-500', 'bg-green-500/10', 'text-green-400');
-                b.classList.add('border-gray-800', 'bg-gray-800/40');
+        try {
+            const response = await fetch(getApiUrl('/api/templates/apply'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ template_name: window.selectedTemplate })
             });
 
-            // Подсветка выбранной кнопки
-            element.classList.remove('border-gray-800', 'bg-gray-800/40');
-            element.classList.add('border-green-500', 'bg-green-500/10', 'text-green-400');
-
-            // Обновляем iframe через эндпоинт статики бэкенда
-            const previewUrl = `${basePath}preview/${name}/index.html`;
-            document.getElementById('preview-frame').src = previewUrl;
-            document.getElementById('preview-url').innerText = `Предпросмотр файла: templates/${name}/index.html`;
-
-            // Делаем активной главную кнопку действия
-            document.getElementById('apply-btn').disabled = false;
-        }
-
-        // Обработка клика по кнопке применить
-        document.getElementById('apply-btn').onclick = async () => {
-            if (!selectedTemplate) return;
-            
-            try {
-                const response = await fetch(`${basePath}api/templates/apply`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ template_name: selectedTemplate })
-                });
-                const result = await response.json();
-                if (response.ok) {
-                    alert(`Успех: ${result.message}`);
-                } else {
-                    alert(`Ошибка выполнения: ${result.error}`);
-                }
-            } catch (err) {
-                alert("Ошибка: Не удалось связаться с сервером.");
+            const data = await response.json();
+            if (response.ok) {
+                alert(data.message || 'Шаблон успешно применен!');
+            } else {
+                alert('Ошибка: ' + data.error);
             }
-        };
+        } catch (error) {
+            alert('Не удалось связаться с сервером.');
+        }
+    }
 
-        // Инициализация при старте страницы
+    // Вызываем загрузку при старте страницы
+    document.addEventListener('DOMContentLoaded', () => {
         loadTemplates();
-    </script>
+    });
+</script>
 </body>
 </html>
