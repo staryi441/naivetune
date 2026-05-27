@@ -89,6 +89,10 @@ if [ ! -f "$ENV_FILE" ]; then
     ADMIN_PASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
     WEB_PATH="/"$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1)"/"
     
+    # Получаем IP сервера (первый адрес из hostname -I)
+    SERVER_IP=$(hostname -I | awk '{print $1}')
+    [ -z "$SERVER_IP" ] && SERVER_IP="127.0.0.1"
+
     # Записываем их в файл
     echo "ADMIN_USER=$ADMIN_USER" > $ENV_FILE
     echo "ADMIN_PASS=$ADMIN_PASS" >> $ENV_FILE
@@ -103,7 +107,7 @@ if [ ! -f "$ENV_FILE" ]; then
     echo -e "password: ${GREEN}$ADMIN_PASS${NC}"
     echo -e "port: 2283"
     echo -e "webBasePath: ${GREEN}$WEB_PATH${NC}"
-    echo -e "Access URL: http://<ВАШ_IP>:2283$WEB_PATH"
+    echo -e "Access URL: http://$SERVER_IP:2283$WEB_PATH"
     echo -e "========================================================="
 else
     echo -e "${GREEN}Настройки уже существуют, пропускаем генерацию.${NC}"
