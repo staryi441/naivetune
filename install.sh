@@ -80,6 +80,41 @@ systemctl daemon-reload
 systemctl enable caddy naivetune
 systemctl restart caddy naivetune
 
+echo -e "${GREEN}=== 5. Создание утилиты naivetune ===${NC}"
+cat << 'EOF' > /usr/local/bin/naivetune
+#!/bin/bash
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# Проверка сервисов
+if systemctl is-active --quiet caddy && systemctl is-active --quiet naivetune; then
+    STATUS="${GREEN}RUNNING${NC}"
+else
+    STATUS="${RED}STOPPED${NC}"
+fi
+
+# Чтение конфига
+if [ -f "/var/lib/naivetune/.env" ]; then
+    source /var/lib/naivetune/.env
+fi
+
+clear
+figlet NaiveTune
+echo -e "========================================================="
+echo -e "System Status: ${STATUS}"
+echo -e "---------------------------------------------------------"
+echo -e "username: ${GREEN}${ADMIN_USER:-N/A}${NC}"
+echo -e "password: ${GREEN}${ADMIN_PASS:-N/A}${NC}"
+echo -e "Access:   http://$(hostname -I | awk '{print $1}'):2283${WEB_BASE_PATH}"
+echo -e "========================================================="
+if [ "$STATUS" == "${RED}STOPPED${NC}" ]; then
+    echo -e "${RED}Внимание: Сервисы не запущены!${NC}"
+    echo -e "Запустите их командой: sudo systemctl start caddy naivetune"
+fi
+EOF
+chmod +x /usr/local/bin/naivetune
+
 # --- ГЕНЕРАЦИЯ АДМИН-ДАННЫХ ПРИ ПЕРВОЙ УСТАНОВКЕ ---
 ENV_FILE="/var/lib/naivetune/.env"
 
