@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NaiveTune Web Admin</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+        body { background-color: #0b0f19; color: #e2e8f0; }
+    </style>
+</head>
+<body class="p-6">
+    <div class="max-w-7xl mx-auto">
+        <div class="flex justify-between items-center border-b border-gray-800 pb-4 mb-6">
+            <h1 class="text-3xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-blue-500">
+                NaiveTune Web Panel
+            </h1>
+            <span class="px-3 py-1 bg-green-500/10 text-green-400 rounded-full text-sm font-medium border border-green-500/20">
+                Connected via SSH/Web
+            </span>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <div class="lg:col-span-1 bg-gray-900/50 p-4 rounded-xl border border-gray-800 flex flex-col justify-between h-[75vh]">
+                <div>
+                    <h2 class="text-lg font-bold mb-4 text-gray-300">Шаблоны сайтов</h2>
+                    <div id="templates-list" class="space-y-2 overflow-y-auto max-h-[50vh]">
+                        <p class="text-gray-500 text-sm animate-pulse">Анализ папки templates...</p>
+                    </div>
+                </div>
+                
+                <button id="apply-btn" disabled class="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 text-white font-bold py-2.5 px-4 rounded-lg transition duration-200 cursor-pointer disabled:cursor-not-allowed">
+                    Применить заглушку
+                </button>
+            </div>
+
+            <div class="lg:col-span-3 flex flex-col bg-gray-900/50 rounded-xl border border-gray-800 overflow-hidden h-[75vh]">
+                <div class="bg-gray-900 p-3 border-b border-gray-800 flex items-center justify-between">
+                    <span class="text-sm font-mono text-gray-400" id="preview-url">Превью: выберите шаблон из списка</span>
+                </div>
+                <div class="flex-1 bg-white">
+                    <iframe id="preview-frame" class="w-full h-full border-none" src="about:blank"></iframe>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Получаем динамический секретный путь, переданный из Go-бэкенда
+        const basePath = "{{.CurrentWebPath}}";
+        let selectedTemplate = "";
+
+        // Загрузка папок-заглушек с бэкенда
+        async function loadTemplates() {
+            try {
+                const response = await fetch(`${basePath}api/templates`);
+                const templates = await response.json();
+                const listContainer = document.getElementById('templates-list');
+                listContainer.innerHTML = '';
+
+                if (!templates || templates.length === 0) {
+                    listContainer.innerHTML = '<p class="text-gray-500 text-sm">В папке templates нет доступных сайтов.</p>';
+                    return;
+                }
+
+                templates.forEach(tpl => {
+                    const btn = document.createElement('button');
+                    btn.className = "w-full text-left px-4 py-3 rounded-lg bg-gray-800/40 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 transition font-medium text-sm block cursor-pointer";
+                    btn.innerText = tpl;
+                    btn.onclick = () => selectTemplate(tpl, btn);
+                    listContainer.appendChild(btn);
+                });
+            } catch (err) {
+                console.error("Ошибка загрузки списка шаблонов:", err);
+            }
+        }
+
+        // Выбор шаблона из списка
+        function selectTemplate(name, element) {
+            selectedTemplate = name;
+            
+            // Сброс активных стилей у кнопок
+            document.querySelectorAll('#templates-list button').forEach(b => {
+                b.classList.remove('border-green-500', 'bg-green-500/10', 'text-green-400');
+                b.classList.add('border-gray-800', 'bg-gray-800/40');
+            });
+
+            // Подсветка выбранной кнопки
+            element.classList.remove('border-gray-800', 'bg-gray-800/40');
+            element.classList.add('border-green-500', 'bg-green-500/10', 'text-green-400');
+
+            // Обновляем iframe через эндпоинт статики бэкенда
+            const previewUrl = `${basePath}preview/${name}/index.html`;
+            document.getElementById('preview-frame').src = previewUrl;
+            document.getElementById('preview-url').innerText = `Предпросмотр файла: templates/${name}/index.html`;
+
+            // Делаем активной главную кнопку действия
+            document.getElementById('apply-btn').disabled = false;
+        }
+
+        // Обработка клика по кнопке применить
+        document.getElementById('apply-btn').onclick = async () => {
+            if (!selectedTemplate) return;
+            
+            try {
+                const response = await fetch(`${basePath}api/templates/apply`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ template_name: selectedTemplate })
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    alert(`Успех: ${result.message}`);
+                } else {
+                    alert(`Ошибка выполнения: ${result.error}`);
+                }
+            } catch (err) {
+                alert("Ошибка: Не удалось связаться с сервером.");
+            }
+        };
+
+        // Инициализация при старте страницы
+        loadTemplates();
+    </script>
+</body>
+</html>

@@ -48,7 +48,12 @@ cp ./naivetune-backend /usr/local/bin/naivetune-backend && chmod +x /usr/local/b
 # --- БЛОК 4: Настройка структуры, данных и Caddyfile ---
 echo -e "${GREEN}=== 4. Настройка системы и конфигурации ===${NC}"
 mkdir -p /etc/caddy /var/lib/naivetune/templates /var/www/html
-[ -d "./templates" ] && cp -r ./templates/* /var/lib/naivetune/templates/
+
+# Очищаем старые шаблоны в системной директории перед копированием свежих из репозитория
+rm -rf /var/lib/naivetune/templates/*
+if [ -d "./templates" ]; then
+    cp -r ./templates/* /var/lib/naivetune/templates/
+fi
 
 ENV_FILE="/var/lib/naivetune/.env"
 if [ ! -f "$ENV_FILE" ]; then
@@ -62,19 +67,28 @@ if [ ! -f "$ENV_FILE" ]; then
     echo "ADMIN_PASS=$ADMIN_PASS" >> $ENV_FILE
     echo "WEB_BASE_PATH=$WEB_PATH" >> $ENV_FILE
 else
-    # Данные уже есть — подтягиваем их
-    source $ENV_FILE
-    WEB_PATH=$WEB_BASE_PATH
+    # Данные уже есть — парсим их аккуратно без source (на случай специфических символов)
+    ADMIN_USER=$(grep ADMIN_USER "$ENV_FILE" | cut -d '=' -f2)
+    ADMIN_PASS=$(grep ADMIN_PASS "$ENV_FILE" | cut -d '=' -f2)
+    WEB_PATH=$(grep WEB_BASE_PATH "$ENV_FILE" | cut -d '=' -f2)
 fi
 
-# Генерируем чистый рабочий Caddyfile, чтобы у Caddy не было ошибок
+# Генерируем Caddyfile с разделением портов:
+# Порт 80 — для внешних пользователей (отдает выбранный из админки шаблон из /var/www/html)
+# Порт 2283 — для входа в панель управления
 cat << EOF > /etc/caddy/Caddyfile
+# Сайт-заглушка для внешних запросов по домену или IP
+:80 {
+    root * /var/www/html
+    file_server
+}
+
+# Админ-панель NaiveTune
 :2283 {
     reverse_proxy $WEB_PATH* 127.0.0.1:2283
     
-    file_server {
-        root /var/www/html
-    }
+    root * /var/www/html
+    file_server
 }
 EOF
 
@@ -125,7 +139,9 @@ else
 fi
 
 if [ -f "/var/lib/naivetune/.env" ]; then
-    source /var/lib/naivetune/.env
+    ADMIN_USER=$(grep ADMIN_USER "/var/lib/naivetune/.env" | cut -d '=' -f2)
+    ADMIN_PASS=$(grep ADMIN_PASS "/var/lib/naivetune/.env" | cut -d '=' -f2)
+    WEB_PATH=$(grep WEB_BASE_PATH "/var/lib/naivetune/.env" | cut -d '=' -f2)
 fi
 
 SERVER_IP=$(hostname -I | awk '{print $1}')
@@ -140,7 +156,7 @@ echo -e "-> Panel Backend: ${BACKEND_ST}"
 echo -e "---------------------------------------------------------"
 echo -e "username: ${GREEN}${ADMIN_USER:-N/A}${NC}"
 echo -e "password: ${GREEN}${ADMIN_PASS:-N/A}${NC}"
-echo -e "Access:   http://${SERVER_IP}:2283${WEB_BASE_PATH}"
+echo -e "Access:   http://${SERVER_IP}:2283${WEB_PATH}"
 echo -e "========================================================="
 
 if [ "$CADDY_ST" == "${RED}STOPPED${NC}" ] || [ "$BACKEND_ST" == "${RED}STOPPED${NC}" ]; then
