@@ -22,6 +22,7 @@ rm -f /usr/local/bin/naivetune
 # 3. Удаление рабочих директорий
 rm -rf /var/lib/naivetune
 rm -rf /etc/caddy
+rm -rf naivetune
 
 # 4. Удаление автозапуска из .bashrc (ищем и удаляем строку с командой)
 # Берем для текущего пользователя, если нужно для других - добавить цикл по /home
