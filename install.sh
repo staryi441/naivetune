@@ -28,8 +28,9 @@ echo -e "${GREEN}=== 3. Сборка Caddy и Бэкенда ===${NC}"
 
 # Сборка Caddy
 if ! command -v xcaddy &> /dev/null; then
+    export GOPATH=$HOME/go
     go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-    ln -sf ~/go/bin/xcaddy /usr/bin/go/bin/xcaddy # Исправил путь, если go в /usr/local/go
+    ln -sf $GOPATH/bin/xcaddy /usr/bin/xcaddy
 fi
 xcaddy build --with github.com/caddyserver/forwardproxy@master=github.com/klzgrad/forwardproxy@naive
 cp ./caddy /usr/local/bin/caddy && chmod +x /usr/local/bin/caddy
@@ -37,22 +38,47 @@ cp ./caddy /usr/local/bin/caddy && chmod +x /usr/local/bin/caddy
 # Сборка Бэкенда с предварительной проверкой зависимостей
 echo -e "${GREEN}--- Подготовка модулей Go ---${NC}"
 export GOPROXY=https://proxy.golang.org,direct
-# Если go.mod нет, инициализируем
 [ ! -f "go.mod" ] && go mod init naivetune
-# Скачиваем и чистим зависимости
 go mod tidy
 
 echo -e "${GREEN}--- Компиляция бэкенда ---${NC}"
 go build -o naivetune-backend *.go
 cp ./naivetune-backend /usr/local/bin/naivetune-backend && chmod +x /usr/local/bin/naivetune-backend
 
-# --- БЛОК 4: Структура и Systemd ---
-echo -e "${GREEN}=== 4. Настройка системы ===${NC}"
+# --- БЛОК 4: Настройка структуры, данных и Caddyfile ---
+echo -e "${GREEN}=== 4. Настройка системы и конфигурации ===${NC}"
 mkdir -p /etc/caddy /var/lib/naivetune/templates /var/www/html
-[ -f "./Caddyfile.template" ] && cp ./Caddyfile.template /var/lib/naivetune/
 [ -d "./templates" ] && cp -r ./templates/* /var/lib/naivetune/templates/
 
-# Создание сервисов
+ENV_FILE="/var/lib/naivetune/.env"
+if [ ! -f "$ENV_FILE" ]; then
+    # Данных нет — генерируем новые
+    ADMIN_USER=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
+    ADMIN_PASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
+    WEB_PATH_RAW=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1)
+    WEB_PATH="/${WEB_PATH_RAW}/"
+    
+    echo "ADMIN_USER=$ADMIN_USER" > $ENV_FILE
+    echo "ADMIN_PASS=$ADMIN_PASS" >> $ENV_FILE
+    echo "WEB_BASE_PATH=$WEB_PATH" >> $ENV_FILE
+else
+    # Данные уже есть — подтягиваем их
+    source $ENV_FILE
+    WEB_PATH=$WEB_BASE_PATH
+fi
+
+# Генерируем чистый рабочий Caddyfile, чтобы у Caddy не было ошибок
+cat << EOF > /etc/caddy/Caddyfile
+:2283 {
+    reverse_proxy $WEB_PATH* 127.0.0.1:2283
+    
+    file_server {
+        root /var/www/html
+    }
+}
+EOF
+
+# Создание системных сервисов
 cat << EOF > /etc/systemd/system/caddy.service
 [Unit]
 Description=Caddy Server
@@ -80,75 +106,53 @@ systemctl daemon-reload
 systemctl enable caddy naivetune
 systemctl restart caddy naivetune
 
-echo -e "${GREEN}=== 5. Создание утилиты naivetune ===${NC}"
+# --- БЛОК 5: Создание утилиты naivetune ---
+echo -e "${GREEN}=== 5. Создание утилиты контроля naivetune ===${NC}"
 cat << 'EOF' > /usr/local/bin/naivetune
 #!/bin/bash
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Проверка сервисов
-if systemctl is-active --quiet caddy && systemctl is-active --quiet naivetune; then
-    STATUS="${GREEN}RUNNING${NC}"
+# Раздельный опрос статуса служб
+if systemctl is-active --quiet caddy; then CADDY_ST="${GREEN}RUNNING${NC}"; else CADDY_ST="${RED}STOPPED${NC}"; fi
+if systemctl is-active --quiet naivetune; then BACKEND_ST="${GREEN}RUNNING${NC}"; else BACKEND_ST="${RED}STOPPED${NC}"; fi
+
+if [ "$CADDY_ST" == "${GREEN}RUNNING${NC}" ] && [ "$BACKEND_ST" == "${GREEN}RUNNING${NC}" ]; then
+    SYS_STATUS="${GREEN}OK (ALL RUNNING)${NC}"
 else
-    STATUS="${RED}STOPPED${NC}"
+    SYS_STATUS="${RED}ATTENTION (SOME SERVICES DOWN)${NC}"
 fi
 
-# Чтение конфига
 if [ -f "/var/lib/naivetune/.env" ]; then
     source /var/lib/naivetune/.env
 fi
 
+SERVER_IP=$(hostname -I | awk '{print $1}')
+[ -z "$SERVER_IP" ] && SERVER_IP="127.0.0.1"
+
 clear
 figlet NaiveTune
 echo -e "========================================================="
-echo -e "System Status: ${STATUS}"
+echo -e "System Status: ${SYS_STATUS}"
+echo -e "-> Caddy Server:  ${CADDY_ST}"
+echo -e "-> Panel Backend: ${BACKEND_ST}"
 echo -e "---------------------------------------------------------"
 echo -e "username: ${GREEN}${ADMIN_USER:-N/A}${NC}"
 echo -e "password: ${GREEN}${ADMIN_PASS:-N/A}${NC}"
-echo -e "Access:   http://$(hostname -I | awk '{print $1}'):2283${WEB_BASE_PATH}"
+echo -e "Access:   http://${SERVER_IP}:2283${WEB_BASE_PATH}"
 echo -e "========================================================="
-if [ "$STATUS" == "${RED}STOPPED${NC}" ]; then
-    echo -e "${RED}Внимание: Сервисы не запущены!${NC}"
-    echo -e "Запустите их командой: sudo systemctl start caddy naivetune"
+
+if [ "$CADDY_ST" == "${RED}STOPPED${NC}" ] || [ "$BACKEND_ST" == "${RED}STOPPED${NC}" ]; then
+    echo -e "${RED}Рестарт служб: sudo systemctl restart caddy naivetune${NC}"
 fi
 EOF
 chmod +x /usr/local/bin/naivetune
 
-# --- ГЕНЕРАЦИЯ АДМИН-ДАННЫХ ПРИ ПЕРВОЙ УСТАНОВКЕ ---
-ENV_FILE="/var/lib/naivetune/.env"
-
-if [ ! -f "$ENV_FILE" ]; then
-    # Генерируем рандомные данные
-    ADMIN_USER=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
-    ADMIN_PASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
-    WEB_PATH="/"$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1)"/"
-    
-    # Получаем IP сервера (первый адрес из hostname -I)
-    SERVER_IP=$(hostname -I | awk '{print $1}')
-    [ -z "$SERVER_IP" ] && SERVER_IP="127.0.0.1"
-
-    # Записываем их в файл
-    echo "ADMIN_USER=$ADMIN_USER" > $ENV_FILE
-    echo "ADMIN_PASS=$ADMIN_PASS" >> $ENV_FILE
-    echo "WEB_BASE_PATH=$WEB_PATH" >> $ENV_FILE
-    
-    # Выводим «красивую» панель
-    clear
-    figlet NaiveTune
-    echo -e "========================================================="
-    echo -e "Warning: Panel is not secure with SSL"
-    echo -e "username: ${GREEN}$ADMIN_USER${NC}"
-    echo -e "password: ${GREEN}$ADMIN_PASS${NC}"
-    echo -e "port: 2283"
-    echo -e "webBasePath: ${GREEN}$WEB_PATH${NC}"
-    echo -e "Access URL: http://$SERVER_IP:2283$WEB_PATH"
-    echo -e "========================================================="
-else
-    echo -e "${GREEN}Настройки уже существуют, пропускаем генерацию.${NC}"
-fi
-
-# Добавляем автозапуск при логине, если его там еще нет
+# --- БЛОК 6: Привязка к автозапуску терминала и вывод панели ---
 if ! grep -q "naivetune" ~/.bashrc; then
     echo "naivetune" >> ~/.bashrc
 fi
+
+# Финальный вызов панели, чтобы сразу показать результат
+naivetune
