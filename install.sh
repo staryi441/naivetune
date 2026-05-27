@@ -61,13 +61,13 @@ if [ ! -f "$ENV_FILE" ]; then
     ADMIN_USER=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
     ADMIN_PASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 10 | head -n 1)
     WEB_PATH_RAW=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1)
-    WEB_PATH="/${WEB_PATH_RAW}/"
+    WEB_PATH="/${WEB_PATH_RAW}"
     
     echo "ADMIN_USER=$ADMIN_USER" > $ENV_FILE
     echo "ADMIN_PASS=$ADMIN_PASS" >> $ENV_FILE
     echo "WEB_BASE_PATH=$WEB_PATH" >> $ENV_FILE
 else
-    # Данные уже есть — парсим их аккуратно без source (на случай специфических символов)
+    # Данные уже есть — парсим их аккуратно без source
     ADMIN_USER=$(grep ADMIN_USER "$ENV_FILE" | cut -d '=' -f2)
     ADMIN_PASS=$(grep ADMIN_PASS "$ENV_FILE" | cut -d '=' -f2)
     WEB_PATH=$(grep WEB_BASE_PATH "$ENV_FILE" | cut -d '=' -f2)
@@ -75,7 +75,7 @@ fi
 
 # Генерируем Caddyfile с разделением портов:
 # Порт 80 — для внешних пользователей (отдает выбранный из админки шаблон из /var/www/html)
-# Порт 2283 — для входа в панель управления
+# Порт 2283 — внешний порт админки. Caddy принимает запросы и отправляет на внутренний порт Go (8080)
 cat << EOF > /etc/caddy/Caddyfile
 # Сайт-заглушка для внешних запросов по домену или IP
 :80 {
@@ -85,7 +85,7 @@ cat << EOF > /etc/caddy/Caddyfile
 
 # Админ-панель NaiveTune
 :2283 {
-    reverse_proxy $WEB_PATH* 127.0.0.1:2283
+    reverse_proxy $WEB_PATH* 127.0.0.1:8080
     
     root * /var/www/html
     file_server
@@ -147,6 +147,9 @@ fi
 SERVER_IP=$(hostname -I | awk '{print $1}')
 [ -z "$SERVER_IP" ] && SERVER_IP="127.0.0.1"
 
+# Гарантируем правильное отображение ссылки со слэшем на конце
+CLEAN_PATH="/"$(echo "$WEB_PATH" | tr -d '/')
+
 clear
 figlet NaiveTune
 echo -e "========================================================="
@@ -156,7 +159,7 @@ echo -e "-> Panel Backend: ${BACKEND_ST}"
 echo -e "---------------------------------------------------------"
 echo -e "username: ${GREEN}${ADMIN_USER:-N/A}${NC}"
 echo -e "password: ${GREEN}${ADMIN_PASS:-N/A}${NC}"
-echo -e "Access:   http://${SERVER_IP}:2283${WEB_PATH}"
+echo -e "Access:   http://${SERVER_IP}:2283${CLEAN_PATH}/"
 echo -e "========================================================="
 
 if [ "$CADDY_ST" == "${RED}STOPPED${NC}" ] || [ "$BACKEND_ST" == "${RED}STOPPED${NC}" ]; then

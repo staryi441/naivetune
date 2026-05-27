@@ -17,7 +17,7 @@ import (
 var (
 	AdminUser = ""
 	AdminPass = ""
-	Port      = "2283" // Порт из твоего инсталлятора
+	Port      = "8080" // Внутренний порт бэкенда, чтобы не конфликтовать с Caddy!
 	WebPath   = ""
 )
 
@@ -37,6 +37,10 @@ func main() {
 	// 3. Настройка Gin
 	gin.SetMode(gin.ReleaseMode) // Переводим в релиз, чтобы логи были чистыми
 	r := gin.Default()
+
+	// Включаем умную обработку слэшей на конце URL, чтобы избежать 404 ошибок
+	r.RedirectTrailingSlash = true
+	r.RedirectFixedPath = true
 
 	// Загружаем HTML-шаблон панели управления админа
 	r.LoadHTMLFiles(filepath.Join(BaseDir, "templates", "admin.html"))
@@ -118,8 +122,8 @@ func main() {
 		api.DELETE("/users/:id", DeleteUser)
 	}
 
-	// 5. Запуск сервера
-	log.Printf("Панель Naivetune запущена. Путь: %s, Порт: %s", WebPath, Port)
+	// 5. Запуск сервера локально на внутреннем порту
+	log.Printf("Панель Naivetune запущен на внутреннем интерфейсе. Путь: %s, Порт: %s", WebPath, Port)
 	r.Run("127.0.0.1:" + Port)
 }
 
@@ -148,7 +152,13 @@ func loadConfig() {
 		case "ADMIN_PASS":
 			AdminPass = val
 		case "WEB_BASE_PATH":
-			WebPath = val
+			// Нормализуем путь: убираем лишние слэши на конце, оставляем только в начале
+			path := val
+			if !strings.HasPrefix(path, "/") {
+				path = "/" + path
+			}
+			path = strings.TrimSuffix(path, "/")
+			WebPath = path
 		}
 	}
 	log.Println("Настройки успешно загружены из .env")
