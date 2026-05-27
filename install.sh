@@ -147,3 +147,8 @@ if [ ! -f "$ENV_FILE" ]; then
 else
     echo -e "${GREEN}Настройки уже существуют, пропускаем генерацию.${NC}"
 fi
+
+# Добавляем автозапуск при логине, если его там еще нет
+if ! grep -q "naivetune" ~/.bashrc; then
+    echo "naivetune" >> ~/.bashrc
+fi

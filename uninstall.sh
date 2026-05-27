@@ -1,39 +1,32 @@
 #!/bin/bash
+# Скрипт полного удаления NaiveTune
 
-# Скрипт полного удаления панели Naivetune из системы
-set -e
+if [ "$EUID" -ne 0 ]; then echo "Запустите через sudo!"; exit 1; fi
 
-GREEN='\033[0;32m'
-NC='\033[0;0m'
+echo "=== Начало процесса удаления NaiveTune ==="
 
-echo -e "${GREEN}=== Останавливаем и отключаем системные службы ===${NC}"
-systemctl stop naivetune || true
-systemctl disable naivetune || true
-systemctl stop caddy || true
-systemctl disable caddy || true
-
-echo -e "${GREEN}=== Удаляем конфигурационные файлы служб ===${NC}"
-rm -f /etc/systemd/system/naivetune.service
+# 1. Остановка и удаление сервисов
+echo "Остановка сервисов..."
+systemctl stop caddy naivetune 2>/dev/null || true
+systemctl disable caddy naivetune 2>/dev/null || true
 rm -f /etc/systemd/system/caddy.service
+rm -f /etc/systemd/system/naivetune.service
 systemctl daemon-reload
 
-echo -e "${GREEN}=== Удаляем исполняемые бинарники ===${NC}"
-rm -f /usr/local/bin/naivetune-backend
+# 2. Удаление бинарников и команды naivetune
+echo "Удаление файлов..."
 rm -f /usr/local/bin/caddy
+rm -f /usr/local/bin/naivetune-backend
+rm -f /usr/local/bin/naivetune
 
-echo -e "${GREEN}=== Очищаем созданные директории проекта ===${NC}"
-rm -rf /etc/caddy
+# 3. Удаление рабочих директорий
 rm -rf /var/lib/naivetune
-rm -rf /var/www/html/*
+rm -rf /etc/caddy
 
-echo -e "${GREEN}=== Откатываем правила брандмауэра UFW ===${NC}"
-if command -v ufw &> /dev/null; then
-    ufw delete allow 80/tcp || true
-    ufw delete allow 443/tcp || true
-    ufw delete allow 8080/tcp || true
-    ufw delete deny 8000/tcp || true
+# 4. Удаление автозапуска из .bashrc (ищем и удаляем строку с командой)
+# Берем для текущего пользователя, если нужно для других - добавить цикл по /home
+if [ -f ~/.bashrc ]; then
+    sed -i '/naivetune$/d' ~/.bashrc
 fi
 
-echo -e "${GREEN}===============================================${NC}"
-echo -e "${GREEN} Панель Naivetune полностью удалена из системы! ${NC}"
-echo -e "${GREEN}===============================================${NC}"
+echo "=== Удаление завершено успешно! ==="
